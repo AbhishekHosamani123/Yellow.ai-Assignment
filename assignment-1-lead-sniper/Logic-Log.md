@@ -28,7 +28,7 @@ This is the most interesting part of the build, verified live on 12 Nov 2026:
   - `GET /repos/n8n-io/n8n/stargazers` → **403** `Resource not accessible by personal access token`
   - `GET /repos/torvalds/linux/stargazers` (user-owned repo!) → **403**
   - `GET /repos/torvalds/linux/contributors` → **403**
-- So **no token configuration — classic or fine-grained — can fix this** from outside the n8n-io org. The "obvious" assignment approach is now dead; the naive fix (try a classic token) would burn a submission day for nothing.
+- So **no token configuration — classic or fine-grained — can fix this** from outside the n8n-io org. The "obvious" assignment approach is now dead; the naive fix (try a classic token) is a dead end.
 
 **The pivot — same data, still-public source:** the repo **events feed** still reports every star publicly. In `GET /repos/n8n-io/n8n/events?per_page=100`, each **`WatchEvent` with `payload.action === "started"` is exactly one star**, carrying `actor.login` and `created_at` — the same `{username, starred_at}` pair the stargazers endpoint used to give.
 
@@ -69,7 +69,7 @@ These cost real debugging time and are worth sharing — each was root-caused to
 
 ## Verified evidence (12 Nov 2026)
 
-The repo contains `sim.mjs` — it extracts the **actual Code-node JavaScript and Set-node expressions from the workflow JSON**, runs them inside a mock n8n runtime against the **real GitHub API** (authenticated) and makes a **real Groq LLM call**. Final run against the submission files:
+A local validation harness extracted the **actual Code-node JavaScript and Set-node expressions from the workflow JSON**, ran them inside a mock n8n runtime against the **real GitHub API** (authenticated) and made a **real Groq LLM call**. Final run against the final workflow files:
 
 - Token check: HTTP 200, authenticated as `AbhishekHosamani123` ✓
 - Events feed: HTTP 200 — 100 events, **11 WatchEvents (stars)**, `x-ratelimit-remaining: 4934` ✓
@@ -98,6 +98,6 @@ The complete workflow ran in the candidate's n8n Cloud instance (`radhakrishna66
 | Format Lead Alert → Post to Discord | 1 embed delivered (HTTP 204 No Content) |
 | Below Threshold — Stop | 9 items stopped correctly |
 
-The lead card visible in the Discord channel is the deliverable screenshot evidence.
+The lead card visible in the Discord channel is captured in `discord-lead-alert.png`.
 
 **Final verification (same day):** a later live run under the genuine rule (thresholds 100/50) caught a fresh organic lead — `JoshOsullivan-au` (0 followers, **63 public repos > 50**) — enriched, pitched by Groq and delivered to Discord as a second genuine embed, re-proving the whole chain including the quote-escaping fix (the same run also correctly stopped 7 low-value stars at the filter).

@@ -11,7 +11,6 @@ for each delayed customer, and writes the updated statuses back to
 
 Built with Python `asyncio` (`asyncio.gather`) + `aiohttp`.
 
-> 🎥 **Demo video:** _add your recording link here before submitting_
 
 ---
 
@@ -55,7 +54,7 @@ pip install -r requirements.txt
 
 ### Step 3 — Add your key to `.env`
 
-A `.env` file is already included — just paste your key into it:
+Copy `.env.example` to `.env`, then paste your key into `.env`:
 
 ```
 OPENWEATHER_API_KEY=PASTE_YOUR_KEY_HERE
@@ -150,10 +149,10 @@ is deliberately kept spec-exact in `DELAYING_CONDITIONS`.
 assignment-2-weather-delay-checker/
 ├── weather_delay_checker.py   # the script (asyncio + aiohttp)
 ├── orders.json                # input database; script updates statuses in place
-├── .env                       # your API key (git-ignored — never committed)
+├── .env                       # your API key — create from .env.example (git-ignored, never committed)
 ├── .env.example               # template showing the expected .env format
 ├── requirements.txt           # aiohttp, python-dotenv
-├── AI_LOG.md                  # prompts used to build the logic (submission requirement)
+├── AI_LOG.md                  # prompts used to build the logic
 ├── README.md                  # this file
 └── .gitignore                 # keeps .env out of git
 ```
@@ -177,29 +176,3 @@ assignment-2-weather-delay-checker/
 | `city 'X' does not exist (HTTP 404)` | City name not recognised | Expected for `InvalidCity123` — logged and skipped by design |
 | `429` rate limit | Free tier allows 60 calls/min | Not an issue for 4 cities; throttle if you scale up |
 | `OPENWEATHER_API_KEY is not set` | `.env` missing or still has the placeholder | Paste your key into `.env` |
-
-## Recording the demo (submission requirement)
-
-A ~90-second recording is enough. On Windows: press `Win + Alt + R`
-(Xbox Game Bar) to start/stop recording, or use PowerPoint → *Insert →
-Screen Recording*, or OBS Studio.
-
-Suggested flow:
-
-1. **(0:00)** Show `orders.json` in the editor — all statuses `Pending`.
-2. Run `python weather_delay_checker.py`.
-3. Point out the three things the assignment cares about:
-   - all requests dispatched **concurrently** (`asyncio.gather` line),
-   - delayed orders + the personalised apology messages,
-   - the `InvalidCity123` error handled gracefully — script keeps going.
-4. Show the updated `orders.json` with `Delayed` statuses.
-5. Close by mentioning: API key loaded from `.env` (not hardcoded), and
-   `AI_LOG.md` documenting the AI prompts used.
-
-## Submission checklist
-
-- [ ] Source code (push this folder to GitHub **or** ZIP it — without `.env`)
-- [ ] Updated `orders.json` from a live run (statuses showing `Delayed`)
-- [ ] `AI_LOG.md` included
-- [ ] Demo recording uploaded (Google Drive/YouTube/Loom) and linked
-- [ ] Submitted **before Fri, 13 Nov 2026, 11:00 AM IST**

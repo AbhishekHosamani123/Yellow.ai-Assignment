@@ -1,6 +1,6 @@
 # AI Log — prompts used to build this assignment
 
-Per the submission requirements: a short log of the prompts used to build the
+Per the assignment brief: a short log of the prompts used to build the
 **Parallel Fetching** and **Error Handling** logic — plus the
 **Weather-Aware Apology** function, which was the explicit "AI Challenge".
 

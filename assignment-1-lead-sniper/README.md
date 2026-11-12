@@ -1,6 +1,6 @@
 # Assignment 1 — Lead Sniper (n8n · GitHub API · Groq LLM · Discord)
 
-**Candidate:** Abhishek Umesh Hosamani · **Deadline: Fri, 13 Nov 2026 — 11:00 AM IST**
+**Candidate:** Abhishek Umesh Hosamani · 12 November 2026
 
 An automated "High-Value Lead" tracker: when someone stars `n8n-io/n8n`, the workflow harvests the star from GitHub's public events feed, enriches their profile, applies the exact rule (**followers > 100 OR public_repos > 50**, otherwise stop), asks an LLM for a one-sentence sales pitch, and posts a rich alert card to Discord.
 
@@ -32,15 +32,10 @@ Format Lead Alert ──► Post to Discord (rich embed)   [Slack alternative no
 
 | File | Purpose |
 |---|---|
-| `lead-sniper.n8n.json` | **The workflow — import this into n8n** (submittable deliverable #1) |
-| `lead-sniper-cloud.n8n.json` | Same workflow pre-wired to the candidate's n8n Cloud credential IDs (for reference/re-import into the cloud instance) |
-| `Logic-Log.md` | **Rate-limit handling, the GitHub restriction discovery & design notes** (submittable deliverable #3) |
-| `README.md` | This file — setup, demo script, submission checklist |
-| `DEMO-SCRIPT.md` | **Step-by-step demo recording guide** — what to click, what to say, what to expect, with fallbacks |
-| `build-workflow.mjs` | Generator that produces the JSON (run `node build-workflow.mjs`) |
-| `sim.mjs` | Validation harness — runs the workflow's real code/expressions against the live API + a real Groq call (bonus evidence) |
-| `test-discord.mjs` | One-shot Discord webhook sender (used to pre-verify the embed format) |
-| `.env` | Local secrets for `sim.mjs` only — **never submit or upload this; delete it after the assignment** |
+| `lead-sniper.n8n.json` | **The workflow — import this into n8n** |
+| `discord-lead-alert.png` | Screenshot of a real lead alert delivered to Discord by the 15-minute scheduler |
+| `Logic-Log.md` | **Rate-limit handling, the GitHub restriction discovery & design notes** |
+| `README.md` | This file — design overview, setup & usage |
 
 ## Setup
 
@@ -57,23 +52,11 @@ For a fresh import anywhere (n8n Cloud or self-hosted):
 
 Select the **Manual Trigger (Demo)** card and click **Execute workflow**. Demo mode pushes the **10 most recent stargazers** through the entire pipeline (dedupe relaxed, enrichment/filter/AI all live). Verified live on 12 Nov 2026: 10 stars → 10 enriched → 9 stopped at the filter → 1 high-value lead (`donnellan0007`, 71 public repos > 50) → real Groq pitch → rich embed posted to Discord.
 
-> If nobody in the current batch passes the filter, just re-run — the feed refreshes constantly and new stars arrive hourly. *(For a guaranteed screenshot you may temporarily set the IF thresholds to 0 — restore 100/50 immediately after recording, and be transparent about it in the demo.)*
+> If nobody in the current batch passes the filter, just re-run — the feed refreshes constantly and new stars arrive hourly.
 
 ## Go live
 
-Toggle the workflow **Active**. The Schedule Trigger polls every 15 min with strict dedupe (watermark persisted in workflow static data). The first scheduled run sets the baseline silently; only genuinely new stars are alerted after that.
-
-## Demo recording
-
-**Follow `DEMO-SCRIPT.md`** — it walks you through the entire recording step by step: what to click, exact words to say, what should appear on screen, and fallbacks for surprises (no passing lead, popup dialogs). Total ~3 minutes.
-
-## Submission checklist
-
-- [x] **Workflow JSON** → `lead-sniper.n8n.json` (verified by live end-to-end runs in n8n Cloud, including fully-organic scheduled alerts)
-- [x] **Screenshot of the Discord message** → saved as `discord-lead-alert.png` (the fully-organic John Shao card, posted by the 15-min scheduler)
-- [x] **Logic Log** → `Logic-Log.md`
-- [ ] **Demo recording** → follow `DEMO-SCRIPT.md`
-- [ ] Upload everything to the submission link **before Fri 13 Nov, 11:00 AM IST**
+Toggle the workflow **Active**. The Schedule Trigger polls every 15 min with strict dedupe (watermark persisted in workflow static data). The first scheduled run sets the baseline silently; only genuinely new stars are alerted after that. Verified live on 12 Nov 2026: four consecutive organic leads were caught, enriched, pitched and posted with zero human involvement over one afternoon.
 
 ## Customization
 
@@ -86,7 +69,6 @@ Toggle the workflow **Active**. The Schedule Trigger polls every 15 min with str
 
 ## Security notes
 
-- Credentials are **not** embedded in the JSON — n8n Header-Auth credentials are referenced by ID/name only. Safe to submit.
-- The Discord webhook URL is baked into the *Post to Discord* node for demo-readiness. **Delete that webhook in Discord after submitting** to invalidate the URL.
-- The GitHub PAT, Groq key and webhook URL were all shared during this session — **rotate all three after submitting** (GitHub: regenerate token; Groq: delete key; Discord: delete webhook). Takes a minute each.
-- `.env` holds your live keys for the validation harness only — **do not submit it**; delete it after the assignment.
+- Credentials are **not** embedded in the workflow JSON — n8n Header-Auth credentials are referenced by ID/name only, so the file is safe to share and import.
+- The *Post to Discord* node ships with a placeholder webhook URL — paste your own webhook URL after importing.
+- Any API keys or webhooks used for the demo should be rotated/deleted after evaluation.
