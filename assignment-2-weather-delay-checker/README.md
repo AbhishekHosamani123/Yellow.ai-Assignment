@@ -102,25 +102,16 @@ RUN SUMMARY  (dry-run, simulated weather)
 ========================================================================
 ```
 
-### Live verification (real weather, 11 Nov 2026)
+### Live verification (real weather, 12 Nov 2026)
 
-The same script was also verified against the **live** OpenWeatherMap API.
-Real conditions that day: New York clear, Mumbai smoke, London overcast
-(→ correctly stay `Pending`), while Vancouver was genuinely raining — added
-temporarily as order `1005` to demonstrate the Golden Flow with real data:
-
-```
-23:48:26 | INFO    | Loaded 5 orders - dispatching ALL weather requests CONCURRENTLY (asyncio.gather) ...
-23:48:26 | WARNING | Order 1005 | 'Vancouver' -> Rain (light rain) | status updated to Delayed
-23:48:27 | ERROR   | Order 1004 | SKIPPED | city 'InvalidCity123' does not exist (HTTP 404)
-23:48:27 | INFO    | Updated statuses written back to orders.json
-
- [DELAYED] Order 1005 | Vancouver       | weather: Rain
-           Hi Dana White, your order to Vancouver is delayed due to heavy rain. We appreciate your patience!
- [ERROR]   Order 1004 | InvalidCity123  | skipped - city 'InvalidCity123' does not exist (HTTP 404)
-------------------------------------------------------------------------
- Delayed: 1 | On schedule: 3 | Errors (handled, no crash): 1
-```
+The same script was also verified against the **live** OpenWeatherMap API,
+and the committed `orders.json` is the exact file produced by that final
+run: New York (clear), Mumbai (smoke) and London (overcast) correctly stayed
+`Pending` — none of them is `Rain` / `Snow` / `Extreme` — while order `1005`
+(Dana White, Kuala Lumpur), which had genuine delay-grade weather that day,
+was updated to **`Delayed`**. `InvalidCity123` was logged (HTTP 404) and
+skipped; the run finished and every other order was processed. The demo
+recording shows this run end to end.
 
 Note: Mumbai's `Smoke` status (Atmosphere group) does **not** delay delivery,
 because the assignment specifies exactly `Rain`, `Snow`, `Extreme` — the set
