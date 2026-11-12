@@ -1,0 +1,514 @@
+{
+  "name": "Lead Sniper — GitHub Star → High-Value Lead Tracker (Yellow.ai Assignment 1)",
+  "nodes": [
+    {
+      "id": "ls-schedule-trigger-15-min",
+      "name": "Schedule Trigger (15 min)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1500,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ls-manual-trigger-demo",
+      "name": "Manual Trigger (Demo)",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1500,
+        480
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "ls-get-recent-star-events",
+      "name": "Get Recent Star Events",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1240,
+        380
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.github.com/repos/n8n-io/n8n/events?per_page=100&page=1",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_GITHUB_PAT_CREDENTIAL",
+          "name": "GitHub PAT (Header Auth)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000
+    },
+    {
+      "id": "ls-rate-limit-guard-dedupe",
+      "name": "Rate-Limit Guard & Dedupe",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -980,
+        380
+      ],
+      "parameters": {
+        "jsCode": "// === STEP 1: guard GitHub quota on the event page, then keep only genuinely NEW stars (dedupe) ===\n// \"Get Recent Star Events\" feeds this node one full-response item\n// ({ body, headers, statusCode }), so $input.all() holds one item per page fetched.\nconst responses = $input.all().map((i) => i.json);\nconst events = [];\nconst remainings = [];\nconst messages = [];\nlet lastStatus = 200;\nlet lastRetryAfter = null;\nlet lastReset = null;\n\nfor (const resp of responses) {\n  const status = resp.statusCode ?? resp.status ?? 200;\n  const rawHeaders = resp.headers ?? {};\n  const headers = {};\n  for (const k of Object.keys(rawHeaders)) headers[String(k).toLowerCase()] = rawHeaders[k];\n  const body = resp.body ?? resp.data;\n  lastStatus = status;\n  lastRetryAfter = headers['retry-after'] || lastRetryAfter;\n  lastReset = headers['x-ratelimit-reset'] || lastReset;\n  const remaining = Number(headers['x-ratelimit-remaining']);\n  if (!Number.isNaN(remaining)) remainings.push(remaining);\n  messages.push((body && body.message) || '');\n  if (Array.isArray(body)) events.push(...body);\n}\n\n// Classify failures precisely: core rate limit vs. secondary (abuse) limit vs. other 403.\nconst message = messages.find(Boolean) || '';\nconst remaining = remainings.length ? Math.min(...remainings) : NaN;\nconst isCoreRateLimit = remaining === 0 || /rate limit/i.test(message);\nconst isSecondaryLimit = /abuse detection|secondary rate/i.test(message);\n\nif (isCoreRateLimit || isSecondaryLimit) {\n  throw new Error('GitHub rate limit hit while listing star events (HTTP ' + lastStatus + (isSecondaryLimit ? ' - secondary/abuse limit' : '') + '). Retry-After: ' + (lastRetryAfter || 'n/a') + 's - aborting this run; the next scheduled run retries automatically.');\n}\nif (lastStatus === 403 || lastStatus === 429) {\n  throw new Error('GitHub returned HTTP ' + lastStatus + ' while listing star events (not a rate limit): ' + message + ' - usually a token problem.');\n}\n// Failsafe: stop while quota is still healthy instead of burning calls down to zero.\nif (!Number.isNaN(remaining) && remaining < 20) {\n  const reset = Number(lastReset) * 1000;\n  throw new Error('GitHub quota nearly exhausted (x-ratelimit-remaining=' + remaining + ', resets at ' + new Date(reset).toISOString() + '). Aborting to preserve quota.');\n}\n\n// Harvest stars from the public events feed: WatchEvent (action \"started\") = one star.\n// The /stargazers listing endpoint is now restricted to repo admins/collaborators\n// (GitHub changelog 2026-06-30), but the events feed still publicly reports every star.\nconst stars = events\n  .filter((e) => e && e.type === 'WatchEvent' && e.payload && e.payload.action === 'started' && e.actor && e.actor.login)\n  .map((e) => ({ username: e.actor.login, starred_at: e.created_at }));\n\n// One entry per (user, timestamp) pair — a re-star inside the window yields 2 events.\nconst seen = new Set();\nconst unique = stars.filter((s) => {\n  const key = s.username + '|' + s.starred_at;\n  if (seen.has(key)) return false;\n  seen.add(key);\n  return true;\n});\nunique.sort((a, b) => new Date(b.starred_at) - new Date(a.starred_at)); // newest first\n\n// Manual runs = DEMO MODE: show the 10 most recent stargazers so the whole\n// pipeline is demoable on demand. Editor test runs report execution mode\n// \"manual\" (self-hosted) or \"test\" (n8n 2.x draft runs) - both are demo.\n// Scheduled (active) runs = PRODUCTION MODE (\"production\"): strict dedupe\n// with a watermark persisted in workflow static data.\nconst MODE = $execution.mode;\nconst isDemo = MODE === 'manual' || MODE === 'test';\nconst staticData = $getWorkflowStaticData('global');\nconst lastSeen = staticData.lastSeenStarredAt || null;\n\nlet fresh;\nif (isDemo) {\n  fresh = unique.slice(0, 10);\n} else if (!lastSeen) {\n  // First production run: set the baseline quietly instead of flooding the\n  // channel with every star inside the fetched window.\n  fresh = [];\n} else {\n  fresh = unique.filter((s) => new Date(s.starred_at) > new Date(lastSeen));\n}\n\n// Advance the watermark to the newest star we have now seen.\nconst newest = unique.length ? unique[0].starred_at : null;\nif (newest && (!lastSeen || new Date(newest) > new Date(lastSeen))) {\n  staticData.lastSeenStarredAt = newest;\n}\n\nreturn fresh.map((s) => ({\n  json: {\n    username: s.username,\n    starred_at: s.starred_at,\n    repo: 'n8n-io/n8n',\n    demo: isDemo\n  }\n}));"
+      }
+    },
+    {
+      "id": "ls-enrich-user-profile",
+      "name": "Enrich User Profile",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -720,
+        380
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.github.com/users/{{ $json.username }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            }
+          ]
+        },
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 5,
+              "batchInterval": 2000
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_GITHUB_PAT_CREDENTIAL",
+          "name": "GitHub PAT (Header Auth)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "ls-attach-star-metadata",
+      "name": "Attach Star Metadata",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -460,
+        380
+      ],
+      "parameters": {
+        "jsCode": "// === STEP 2: drop failed enrichments (404 deleted users etc.), re-attach star metadata ===\nconst metaItems = $('Rate-Limit Guard & Dedupe').all();\nconst out = [];\n$input.all().forEach((item, i) => {\n  const profile = item.json;\n  if (!profile || !profile.login) return; // enrichment failed for this star - skip it quietly\n  const meta = (metaItems[i] && metaItems[i].json) || {};\n  out.push({ json: { ...profile, starred_at: meta.starred_at, repo: meta.repo, demo: !!meta.demo } });\n});\nreturn out;"
+      }
+    },
+    {
+      "id": "ls-high-value-lead",
+      "name": "High-Value Lead?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -200,
+        380
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "or",
+          "conditions": [
+            {
+              "id": "cond-followers-gt-100",
+              "leftValue": "={{ $json.followers }}",
+              "rightValue": 100,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            },
+            {
+              "id": "cond-repos-gt-50",
+              "leftValue": "={{ $json.public_repos }}",
+              "rightValue": 50,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ls-below-threshold-stop",
+      "name": "Below Threshold — Stop",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        60,
+        540
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "ls-ai-pitch-groq-llm",
+      "name": "AI Pitch (Groq LLM)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        60,
+        380
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"model\": \"openai/gpt-oss-120b\", \"temperature\": 0.3, \"max_tokens\": 500, \"reasoning_effort\": \"low\", \"messages\": [{\"role\": \"system\", \"content\": \"You are a B2B sales researcher at Yellow.ai, an AI agentic platform for customer service automation. A GitHub user just starred our repository. Write EXACTLY ONE sentence (max 25 words) explaining why our sales team should reach out to this person. Use their role, company, or domain when visible. Output only the sentence - no quotes, no preamble.\"}, {\"role\": \"user\", \"content\": {{ JSON.stringify([\"Name: \" + ($json.name || \"unknown\"), \"Company: \" + ($json.company || \"not specified\"), \"Bio: \" + ($json.bio || \"not specified\"), \"Location: \" + ($json.location || \"not specified\"), \"Followers: \" + $json.followers, \"Public repos: \" + $json.public_repos, \"Repo they starred: \" + $json.repo].join(\" | \")) }} }]}",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_GROQ_CREDENTIAL",
+          "name": "Groq API Key (Header Auth)"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000
+    },
+    {
+      "id": "ls-format-lead-alert",
+      "name": "Format Lead Alert",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        320,
+        380
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "assign-discord",
+              "name": "discordPayload",
+              "type": "string",
+              "value": "={{ JSON.stringify(((p, pitch) => ({ username: 'Lead Sniper', content: '🎯 **New High-Value Lead** just starred **' + p.repo + '**', embeds: [{ title: (p.name || p.login) + ' (@' + p.login + ')', url: p.html_url, description: '**Bio:** ' + (p.bio || '_no bio provided_') + '\\n**Company:** ' + (p.company || '_not specified_') + '\\n**AI Sales Pitch:** ' + pitch, color: 3066993, fields: [{ name: 'Followers', value: String(p.followers), inline: true }, { name: 'Public repos', value: String(p.public_repos), inline: true }, { name: 'Starred at (UTC)', value: (p.starred_at || '').slice(0, 16).replace('T', ' '), inline: false }], footer: { text: 'Lead Sniper • automated GitHub lead tracker' } }] }))($('High-Value Lead?').item.json, $json.choices[0].message.content || 'No pitch generated')) }}"
+            },
+            {
+              "id": "assign-slack",
+              "name": "slackPayload",
+              "type": "string",
+              "value": "={{ JSON.stringify(((p, pitch) => ({ text: ':dart: *New High-Value Lead* starred *' + p.repo + '*\\n*Name:* ' + (p.name || p.login) + ' - <' + p.html_url + '|' + p.login + '>\\n*Bio:* ' + (p.bio || 'no bio provided') + '\\n*Company:* ' + (p.company || 'not specified') + '\\n*Followers:* ' + p.followers + ' | *Public repos:* ' + p.public_repos + '\\n*AI Sales Pitch:* ' + pitch }))($('High-Value Lead?').item.json, $json.choices[0].message.content || 'No pitch generated')) }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ls-post-to-discord",
+      "name": "Post to Discord",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        580,
+        380
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.discordPayload }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "ls-send-to-slack-alternative",
+      "name": "Send to Slack (alternative)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        580,
+        540
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://hooks.slack.com/services/REPLACE/ME/ME",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.slackPayload }}",
+        "options": {}
+      },
+      "disabled": true
+    },
+    {
+      "id": "ls-sticky-note-setup",
+      "name": "Sticky Note — Setup",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1520,
+        -460
+      ],
+      "parameters": {
+        "content": "## 🚀 SETUP — DO THIS FIRST\n\n**1. Discord webhook:** create your own webhook (Discord → Server Settings → Integrations → Webhooks → New Webhook → Copy URL) and paste it into the \"Post to Discord\" node URL field.\n\n**2. GitHub PAT (free):** github.com/settings/tokens → generate a token (fine-grained or classic — NO scopes needed, we only read public data). In n8n: Credentials → New → Header Auth → Name: Authorization, Value: Bearer ghp_yourtoken. Select this credential in the two GitHub nodes (Get Recent Star Events, Enrich User Profile).\n\n**3. Groq key (free):** console.groq.com → API Keys → create one. Header Auth credential → Name: Authorization, Value: Bearer gsk_yourkey. Select it in \"AI Pitch (Groq LLM)\".\n\n**4. Demo run:** click \"Execute workflow\" — the Manual Trigger pushes the 10 most recent stargazers through the whole pipeline.\n\n**5. Go live:** toggle the workflow Active → polls every 15 min with strict dedupe. The first scheduled run sets the baseline silently.\n\n**Different repo?** Change the repo path in the events URL and the repo constant inside the \"Rate-Limit Guard & Dedupe\" code node.",
+        "width": 520,
+        "height": 520
+      }
+    },
+    {
+      "id": "ls-sticky-note-trigger-fetch",
+      "name": "Sticky Note — Trigger & Fetch",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1240,
+        -40
+      ],
+      "parameters": {
+        "content": "## 🎯 Trigger + fetch design\n\n- **Trigger:** polling via Schedule Trigger every 15 min. (GitHub's native star webhook is the zero-latency alternative, but it needs a public URL — polling keeps this demoable locally.)\n- **Why not /stargazers?** In July 2026 GitHub restricted the stargazers & watchers listing endpoints to repo admins and collaborators (anti-spam measure, changelog 2026-06-30). Verified live: an authenticated call to /repos/n8n-io/n8n/stargazers returns **403** for non-collaborators — no token type or scope changes that.\n- **The fix:** the public events feed still reports every star. GET /repos/n8n-io/n8n/events?per_page=100 — a **WatchEvent** with action \"started\" is one star, with `actor.login` + `created_at`.\n- Just **1 API call per poll**: the latest 100 events currently contain ~12 fresh stars (verified live).\n- Manual run = DEMO (latest 10 stars). Active run = PRODUCTION (strict dedupe persisted in workflow static data).",
+        "width": 460,
+        "height": 320
+      }
+    },
+    {
+      "id": "ls-sticky-note-rate-limits",
+      "name": "Sticky Note — Rate Limits",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -980,
+        560
+      ],
+      "parameters": {
+        "content": "## 🛡️ Rate-limit strategy (full detail in Logic-Log.md)\n\n- Authorization: Bearer PAT → **5,000 req/hour** instead of 60 unauthenticated.\n- Only **1 GitHub call per poll** (one events page).\n- Reads **x-ratelimit-remaining** / **x-ratelimit-reset** from the response headers and aborts the run while quota is still healthy (below 20).\n- HTTP 403/429 → fail fast and respect the **Retry-After** header; the next scheduled run picks up automatically.\n- Enrichment: retryOnFail 3× with 2 s backoff + paced batching (5 items per batch, 2 s between batches).\n- The dedupe watermark means no star is ever enriched twice.",
+        "width": 500,
+        "height": 360
+      }
+    },
+    {
+      "id": "ls-sticky-note-lead-rule",
+      "name": "Sticky Note — Lead Rule",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -200,
+        560
+      ],
+      "parameters": {
+        "content": "## 🧮 The exact business rule\n\nfollowers > 100 **OR** public_repos > 50 → AI pitch + alert (true branch).\n\nOtherwise → **stop the flow** immediately (false branch → No Operation).",
+        "width": 380,
+        "height": 220
+      }
+    },
+    {
+      "id": "ls-sticky-note-ai-pitch",
+      "name": "Sticky Note — AI Pitch",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        60,
+        660
+      ],
+      "parameters": {
+        "content": "## 🤖 The AI piece\n\nGroq (OpenAI-compatible, free tier): POST https://api.groq.com/openai/v1/chat/completions with model openai/gpt-oss-120b.\n\nSystem prompt: analyze Bio + Company (+ Location) and return EXACTLY ONE sentence (max 25 words) on why Yellow.ai's sales team should reach out.\n\nSwap providers freely: any OpenAI-compatible base URL + model id works here; or replace this HTTP node with n8n's native Basic LLM Chain + Chat Model nodes.",
+        "width": 500,
+        "height": 300
+      }
+    },
+    {
+      "id": "ls-sticky-note-output",
+      "name": "Sticky Note — Output",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        840,
+        20
+      ],
+      "parameters": {
+        "content": "## 📤 Output\n\n\"Post to Discord\" sends a rich embed per high-value lead: name, login, bio, company, the AI pitch, followers, public repos and the star time.\n\n\"Send to Slack (alternative)\" is disabled by default: enable it, paste your Slack webhook URL and disconnect the Discord node if your team lives in Slack.",
+        "width": 460,
+        "height": 280
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger (15 min)": {
+      "main": [
+        [
+          {
+            "node": "Get Recent Star Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger (Demo)": {
+      "main": [
+        [
+          {
+            "node": "Get Recent Star Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Recent Star Events": {
+      "main": [
+        [
+          {
+            "node": "Rate-Limit Guard & Dedupe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rate-Limit Guard & Dedupe": {
+      "main": [
+        [
+          {
+            "node": "Enrich User Profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enrich User Profile": {
+      "main": [
+        [
+          {
+            "node": "Attach Star Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach Star Metadata": {
+      "main": [
+        [
+          {
+            "node": "High-Value Lead?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "High-Value Lead?": {
+      "main": [
+        [
+          {
+            "node": "AI Pitch (Groq LLM)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Below Threshold — Stop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Pitch (Groq LLM)": {
+      "main": [
+        [
+          {
+            "node": "Format Lead Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Lead Alert": {
+      "main": [
+        [
+          {
+            "node": "Post to Discord",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send to Slack (alternative)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata"
+  },
+  "pinData": {}
+}
